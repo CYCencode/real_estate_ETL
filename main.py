@@ -83,9 +83,22 @@ def get_pg_engine():
         # 如果密碼沒有設定，無法連線
         raise ValueError("PG_PASSWORD 環境變數未設定，請檢查 Docker 運行參數。")
 
-    DATABASE_URL = (
-        f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    )
+    if DB_HOST.startswith("/cloudsql/"):
+        # Unix Socket 連線格式： host 填寫為 '' 或 'localhost'，
+        # 並且將 socket 路徑作為連線參數 (query string) 傳遞
+        # 這是 Cloud SQL/psycopg2 處理 Unix Socket 連線的標準做法。
+        # 讓 SQLAlchemy 將 DB_HOST 視為 socket 參數
+        DATABASE_URL = (
+            f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}?"
+            f"host={DB_HOST}"
+        )
+    else:
+        # 傳統的 TCP/IP 連線
+        DATABASE_URL = (
+            f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        )
+
+    print(f"DEBUG: Final PG URL: {DATABASE_URL}", file=sys.stderr) 
     return create_engine(DATABASE_URL, echo=False)
 
 
