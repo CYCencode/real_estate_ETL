@@ -48,7 +48,7 @@ def log_to_mongo(log_level: str, message: str, details=None):
             MONGO_URI, 
             serverSelectionTimeoutMS=5000, 
             w=0,
-            tlsAllowInvalidCertificates=True  # SSL 繞過
+            tlsInsecure=True
         ) 
         db = client[MONGO_DB_NAME]
         db[MONGO_COLLECTION].insert_one(log_entry)
