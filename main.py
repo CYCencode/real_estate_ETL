@@ -209,6 +209,26 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 
 # --- 主執行邏輯 ---
 if __name__ == "__main__":
+    print("--- 正在執行靜態 IP 診斷測試 ---")
+    try:
+        # 連線到一個回傳 IP 的服務
+        response = requests.get('https://ifconfig.me/ip', timeout=10)
+        exit_ip = response.text.strip()
+        print(f"**診斷結果：此 Job 的出站 IP 是： {exit_ip} **")
+
+        # 檢查是否為靜態 IP (請將 YOUR_STATIC_IP 替換成您的實際靜態 IP)
+        YOUR_STATIC_IP = os.environ.get("EXPECTED_STATIC_IP") 
+
+        if exit_ip == YOUR_STATIC_IP:
+            print("**🎉 VPC/NAT 設置成功！出站 IP 正確！**")
+        else:
+            print(f"**❌ VPC/NAT 設置失敗！出站 IP 不正確 (預期: {YOUR_STATIC_IP})**")
+            # 如果 IP 錯了，讓程式在這裡退出，不要繼續連 MongoDB
+            return 
+
+    except Exception as e:
+        print(f"**診斷失敗：無法連線 ifconfig.me，可能是網路或防火牆問題。錯誤: {e}**")
+        return
     
     log_to_mongo('INFO',"Starting MVP ETL Data Pipeline")
 
