@@ -8,14 +8,14 @@ import numpy as np
 from pymongo import MongoClient
 from datetime import datetime
 import sys
-import traceback # 引入 traceback 模組，用於捕捉詳細錯誤堆疊
+import traceback
 
 # --- 1. 設定與連線 ---
 # 日誌寫入 MongoDB 的輔助函數
 def log_to_mongo(log_level: str, message: str, details=None):
     """
     從環境變數獲取 MongoDB 連線資訊，並將日誌寫入指定的 Collection。
-    在連線失敗時，退回到標準輸出 (stdout) 進行緊急輸出。
+    在連線失敗時，退回到標準輸出 (stderr) 進行緊急輸出。
     """
     MONGO_URI = os.environ.get("MONGO_URI")
     MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "etl_monitoring")
@@ -43,8 +43,13 @@ def log_to_mongo(log_level: str, message: str, details=None):
         return
 
     try:
-        # 使用 w=0 確保非同步寫入，減少 ETL 流程的延遲 (MVP 適用)
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, w=0) 
+        # 修正縮排並加入 tlsAllowInvalidCertificates=True 繞過 SSL 握手錯誤
+        client = MongoClient(
+            MONGO_URI, 
+            serverSelectionTimeoutMS=5000, 
+            w=0,
+            tlsAllowInvalidCertificates=True  # SSL 繞過
+        ) 
         db = client[MONGO_DB_NAME]
         db[MONGO_COLLECTION].insert_one(log_entry)
         client.close()
@@ -84,10 +89,7 @@ def get_pg_engine():
         raise ValueError("PG_PASSWORD 環境變數未設定，請檢查 Docker 運行參數。")
 
     if DB_HOST.startswith("/cloudsql/"):
-        # Unix Socket 連線格式： host 填寫為 '' 或 'localhost'，
-        # 並且將 socket 路徑作為連線參數 (query string) 傳遞
-        # 這是 Cloud SQL/psycopg2 處理 Unix Socket 連線的標準做法。
-        # 讓 SQLAlchemy 將 DB_HOST 視為 socket 參數
+        # Unix Socket 連線格式
         DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}?"
             f"host={DB_HOST}"
@@ -110,7 +112,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         year -= 1911
 
     url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
-    
+   
     # 【優化】動態生成 TARGET_TABLE_NAME
     trade_type_name = 'used' if trade_type == 'A' else 'presale'
     area_name = area_name_mapping.get(area, 'unknown').lower()
@@ -187,7 +189,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         log_to_mongo('INFO',f"Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}.",
                      details={"rows": len(df_clean), "time_seconds": f"{load_time:.2f}", "table": TARGET_TABLE_NAME})
         
-        print(f"  -> Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}. Time: {load_time:.2f}s")
+        print(f"  -> Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}. Time: {load_time:.2f}s", file=sys.stderr)
         
     except Exception as e:
         # 將錯誤訊息和 traceback 寫入 MongoDB
@@ -210,27 +212,27 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 # --- 主執行邏輯 ---
 if __name__ == "__main__":
     print("--- 正在執行靜態 IP 診斷測試 ---", file=sys.stderr)
+    YOUR_STATIC_IP = os.environ.get("EXPECTED_STATIC_IP") 
+
     try:
         # 連線到一個回傳 IP 的服務
-        # 這裡也將輸出導向 stderr，確保在日誌中被捕捉
         response = requests.get('https://ifconfig.me/ip', timeout=10)
         exit_ip = response.text.strip()
         print(f"**診斷結果：此 Job 的出站 IP 是： {exit_ip} **", file=sys.stderr)
-
-        # 檢查是否為靜態 IP (請將 YOUR_STATIC_IP 替換成您的實際靜態 IP)
-        YOUR_STATIC_IP = os.environ.get("EXPECTED_STATIC_IP") 
 
         if exit_ip == YOUR_STATIC_IP:
             print("**🎉 VPC/NAT 設置成功！出站 IP 正確！**", file=sys.stderr)
         else:
             print(f"**❌ VPC/NAT 設置失敗！出站 IP 不正確 (預期: {YOUR_STATIC_IP})**", file=sys.stderr)
-            # 如果 IP 錯了，讓程式在這裡退出，不要繼續連 MongoDB
-            return 
+            # 移除 return，讓程式碼繼續執行，但會記錄錯誤
+            log_to_mongo('ERROR', "VPC/NAT 配置失敗，出站 IP 不正確。", 
+                         details={"expected_ip": YOUR_STATIC_IP, "actual_ip": exit_ip})
 
     except Exception as e:
         print(f"**診斷失敗：無法連線 ifconfig.me，可能是網路或防火牆問題。錯誤: {e}**", file=sys.stderr)
-        return
-    
+        log_to_mongo('CRITICAL', "靜態 IP 診斷失敗，無法連線外部服務。", details={"error_message": str(e)})
+
+    # 在 IP 診斷後，無論結果如何，都繼續嘗試 ETL 流程
     log_to_mongo('INFO',"Starting MVP ETL Data Pipeline")
 
     try:
