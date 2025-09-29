@@ -212,7 +212,6 @@ if __name__ == "__main__":
     print("--- 正在執行靜態 IP 診斷測試 ---", file=sys.stderr)
     try:
         # 連線到一個回傳 IP 的服務
-        # 這裡也將輸出導向 stderr，確保在日誌中被捕捉
         response = requests.get('https://ifconfig.me/ip', timeout=10)
         exit_ip = response.text.strip()
         print(f"**診斷結果：此 Job 的出站 IP 是： {exit_ip} **", file=sys.stderr)
@@ -221,11 +220,11 @@ if __name__ == "__main__":
         YOUR_STATIC_IP = os.environ.get("EXPECTED_STATIC_IP") 
 
         if exit_ip == YOUR_STATIC_IP:
-            print("**🎉 VPC/NAT 設置成功！出站 IP 正確！**", file=sys.stderr)
+            print("**🎉 VPC/NAT 設置成功！出站 IP 正確！*"*, file=sys.stderr)
         else:
             print(f"**❌ VPC/NAT 設置失敗！出站 IP 不正確 (預期: {YOUR_STATIC_IP})**", file=sys.stderr)
             # 如果 IP 錯了，讓程式在這裡退出，不要繼續連 MongoDB
-            return 
+            return
 
     except Exception as e:
         print(f"**診斷失敗：無法連線 ifconfig.me，可能是網路或防火牆問題。錯誤: {e}**", file=sys.stderr)
