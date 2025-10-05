@@ -6,26 +6,27 @@ from sqlalchemy import create_engine, text
 from io import StringIO
 import numpy as np
 from pymongo import MongoClient
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
-import traceback # 引入 traceback 模組，用於捕捉詳細錯誤堆疊
+import traceback
 
 # --- 1. 設定與連線 ---
 # 日誌寫入 MongoDB 的輔助函數
 def log_to_mongo(log_level: str, message: str, details=None):
     """
     從環境變數獲取 MongoDB 連線資訊，並將日誌寫入指定的 Collection。
-    在連線失敗時，退回到標準輸出 (stdout) 進行緊急輸出。
+    在連線失敗時，退回到標準輸出 (stderr) 進行緊急輸出。
     """
     MONGO_URI = os.environ.get("MONGO_URI")
     MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "etl_monitoring")
     MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "pipeline_logs")
-    
+    PIPELINE_NAME = os.environ.get("JOB_NAME", "unknown-cloud-run-job")    
+
     log_entry = {
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc),
         "level": log_level,
         "message": message,
-        "pipeline_name": "real_estate_mvp",
+        "pipeline_name": PIPELINE_NAME,
         "details": details if details is not None else {}
     }
 
@@ -43,8 +44,13 @@ def log_to_mongo(log_level: str, message: str, details=None):
         return
 
     try:
-        # 使用 w=0 確保非同步寫入，減少 ETL 流程的延遲 (MVP 適用)
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, w=0) 
+        # 修正縮排並加入 tlsAllowInvalidCertificates=True 繞過 SSL 握手錯誤
+        client = MongoClient(
+            MONGO_URI, 
+            serverSelectionTimeoutMS=5000, 
+            w=0,
+            tlsInsecure=True
+        ) 
         db = client[MONGO_DB_NAME]
         db[MONGO_COLLECTION].insert_one(log_entry)
         client.close()
@@ -84,10 +90,7 @@ def get_pg_engine():
         raise ValueError("PG_PASSWORD 環境變數未設定，請檢查 Docker 運行參數。")
 
     if DB_HOST.startswith("/cloudsql/"):
-        # Unix Socket 連線格式： host 填寫為 '' 或 'localhost'，
-        # 並且將 socket 路徑作為連線參數 (query string) 傳遞
-        # 這是 Cloud SQL/psycopg2 處理 Unix Socket 連線的標準做法。
-        # 讓 SQLAlchemy 將 DB_HOST 視為 socket 參數
+        # Unix Socket 連線格式
         DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}?"
             f"host={DB_HOST}"
@@ -110,7 +113,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         year -= 1911
 
     url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
-    
+   
     # 【優化】動態生成 TARGET_TABLE_NAME
     trade_type_name = 'used' if trade_type == 'A' else 'presale'
     area_name = area_name_mapping.get(area, 'unknown').lower()
@@ -187,7 +190,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         log_to_mongo('INFO',f"Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}.",
                      details={"rows": len(df_clean), "time_seconds": f"{load_time:.2f}", "table": TARGET_TABLE_NAME})
         
-        print(f"  -> Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}. Time: {load_time:.2f}s")
+        print(f"  -> Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}. Time: {load_time:.2f}s", file=sys.stderr)
         
     except Exception as e:
         # 將錯誤訊息和 traceback 寫入 MongoDB
@@ -209,7 +212,6 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 
 # --- 主執行邏輯 ---
 if __name__ == "__main__":
-    
     log_to_mongo('INFO',"Starting MVP ETL Data Pipeline")
 
     try:
