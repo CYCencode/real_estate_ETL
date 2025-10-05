@@ -86,33 +86,13 @@ def get_pg_engine():
     if not DB_PASSWORD:
         raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
 
-    if DB_HOST.startswith("/cloudsql/"):
-        # *** Cloud SQL Unix Socket 連線修正 (使用 connect_args) ***
-        # 連線 URL 中不包含 host，使用 connect_args 傳遞 host 參數 (即 /cloudsql/...)
-        
-        # 1. SQLAlchemy URL (不含 host/port)
-        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}"
-        
-        # 2. 額外參數：將 Unix Socket 路徑當作 'host' 傳遞給 psycopg2
-        connect_args = {
-            'host': DB_HOST 
-        }
-
-        print(f"DEBUG: Final PG URL: {DATABASE_URL} (Connect Args: {connect_args})", file=sys.stderr)
-        
-        return create_engine(
-            DATABASE_URL, 
-            echo=False,
-            connect_args=connect_args # 通過這裡傳遞 Unix Socket 路徑
-        )
-    else:
-        # 傳統的 TCP/IP 連線
-        DATABASE_URL = (
+    
+    # 傳統的 TCP/IP 連線
+    DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        )
-        print(f"DEBUG: Final PG URL: {DATABASE_URL}", file=sys.stderr)
-        # *** 修正：補上 return 指令 ***
-        return create_engine(DATABASE_URL, echo=False)
+    )
+    print(f"DEBUG: Final PG URL: {DATABASE_URL}", file=sys.stderr)
+    return create_engine(DATABASE_URL, echo=False)
 
 
 # --- 2. 核心 ETL 邏輯 ---

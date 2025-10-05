@@ -14,8 +14,8 @@ export IMAGE_PATH="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${IMAGE_REPO}/${IM
 export JOB_NAME="cloud-run-real-estate-job"
 export PG_USER='postgres'
 export PG_DATABASE='postgres'
-export PG_HOST='/cloudsql/plenary-keel-342408:us-central1:real-estate-dw'
-export MONGO_DB_NAME='real-estate-etl_monitoring' # 已更名
+export PG_HOST='10.8.240.3' #改用private ip
+export MONGO_DB_NAME='real-estate-etl_monitoring'
 
 # --- 部署/執行指令 ---
 gcloud builds submit . --tag $IMAGE_PATH
