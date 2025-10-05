@@ -76,40 +76,36 @@ FILTER_COLUMN = "交易標的"
 
 
 def get_pg_engine():
-    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。
-    支援 Cloud SQL Auth Proxy 的 Unix Socket 連線模式。
-    """
+    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。"""
     DB_USER = os.environ.get("PG_USER", "postgres")
     DB_PASSWORD = os.environ.get("PG_PASSWORD")
     DB_HOST = os.environ.get("PG_HOST", "localhost") 
-    DB_PORT = os.environ.get("PG_PORT", "5432")
     DB_NAME = os.environ.get("PG_DATABASE", "postgres")
 
     if not DB_PASSWORD:
         raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
 
-    
     # 檢查是否為 Unix Socket (Proxy) 連線
     if DB_HOST.startswith("/cloudsql/"):
         
-        # 1. DATABASE_URL：
-        #    - 必須指定 @localhost，讓 SQLAlchemy/psycopg2 知道連線目標是本地。
-        #    - 這樣做會觸發 Psycopg2 的 Unix Socket 連線模式。
-        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@localhost/{DB_NAME}"
+        # DATABASE_URL 的 host 欄位必須留空 (或只填寫 @/)
+        # 這會強制 Psycopg2 進入 Unix Socket 模式，並期望在 connect_args 中找到路徑。
+        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}"
         
-        # 2. connect_args：
-        #    - 使用 'options' 參數，這是 Psycopg2/SQLAlchemy 專門用來傳遞自訂連線選項的方法。
-        #    - 將 Unix Socket 目錄 (DB_HOST) 透過 options 參數傳遞給 Proxy。
+        # connect_args 必須將 Unix Socket 目錄直接賦值給 'host' 鍵。
+        # Psycopg2 專門處理這種情況，將這個值視為 Socket 目錄。
         connect_args = {
-            'options': f'-c host={DB_HOST}'
+            'host': DB_HOST 
         }
 
-        print(f"DEBUG (Socket Final): Final PG URL: {DATABASE_URL} (Connect Args: {connect_args})", file=sys.stderr)
+        print(f"DEBUG (Socket Final - V3): Final PG URL: {DATABASE_URL} (Connect Args: {connect_args})", file=sys.stderr)
         
+        # 執行連線
         return create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
         
     else:
-        # 傳統的 TCP/IP 連線 (用於除錯或非 Proxy 環境)
+        # 傳統的 TCP/IP 連線 (保持不變)
+        DB_PORT = os.environ.get("PG_PORT", "5432")
         DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
         )
