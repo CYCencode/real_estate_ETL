@@ -3,6 +3,7 @@ import os
 import time
 import pandas as pd
 from sqlalchemy import create_engine, text
+from psycopg2 import OperationalError 
 from io import StringIO
 import numpy as np
 from pymongo import MongoClient
@@ -20,7 +21,7 @@ def log_to_mongo(log_level: str, message: str, details=None):
     MONGO_URI = os.environ.get("MONGO_URI")
     MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "etl_monitoring")
     MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "pipeline_logs")
-    PIPELINE_NAME = os.environ.get("JOB_NAME", "unknown-cloud-run-job")   
+    PIPELINE_NAME = os.environ.get("JOB_NAME", "unknown-cloud-run-job")    
 
     log_entry = {
         "timestamp": datetime.now(timezone.utc),
@@ -75,10 +76,11 @@ FILTER_COLUMN = "交易標的"
 
 
 def get_pg_engine():
-    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。"""
+    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。
+    支援 Cloud SQL Auth Proxy 的 Unix Socket 連線模式。
+    """
     DB_USER = os.environ.get("PG_USER", "postgres")
     DB_PASSWORD = os.environ.get("PG_PASSWORD")
-    # 從 deploy.sh 取得：/cloudsql/plenary-keel-342408:us-central1:real-estate-dw
     DB_HOST = os.environ.get("PG_HOST", "localhost") 
     DB_PORT = os.environ.get("PG_PORT", "5432")
     DB_NAME = os.environ.get("PG_DATABASE", "postgres")
@@ -87,15 +89,24 @@ def get_pg_engine():
         raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
 
     
-    # 傳統的 TCP/IP 連線
-    DATABASE_URL = (
+    # 檢查是否為 Unix Socket (Proxy) 連線
+    if DB_HOST.startswith("/cloudsql/"):
+        # Cloud SQL Auth Proxy 會在容器內建立 Unix Socket
+        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}"
+        # DB_HOST 傳遞給 psycopg2 的 connect_args，作為 Unix Socket 路徑
+        connect_args = {'host': DB_HOST}
+        print(f"DEBUG (Socket): Final PG URL: {DATABASE_URL} (Connect Args: {connect_args})", file=sys.stderr)
+        return create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+    else:
+        # 傳統的 TCP/IP 連線 (用於除錯或非 Proxy 環境)
+        DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    )
-    print(f"DEBUG: Final PG URL: {DATABASE_URL}", file=sys.stderr)
-    return create_engine(DATABASE_URL, echo=False)
+        )
+        print(f"DEBUG (TCP/IP): Final PG URL: {DATABASE_URL}", file=sys.stderr)
+        return create_engine(DATABASE_URL, echo=False)
 
 
-# --- 2. 核心 ETL 邏輯 ---
+# --- 2. 核心 ETL 邏輯 (保持不變) ---
 
 def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 
@@ -116,7 +127,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 
     if res.status_code != 200:
         log_to_mongo('ERROR',f"Error: HTTP status code {res.status_code} for {url}",
-                     details={"http_status": res.status_code, "table": TARGET_TABLE_NAME})
+                      details={"http_status": res.status_code, "table": TARGET_TABLE_NAME})
         return
 
     csv_data = StringIO(res.text, newline=None)
@@ -134,7 +145,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
     if not all(col in df.columns for col in required_cols):
         missing = [col for col in required_cols if col not in df.columns]
         log_to_mongo('ERROR',f"Missing critical columns for {TARGET_TABLE_NAME}", 
-                     details={"missing_columns": missing, "table": TARGET_TABLE_NAME})
+                      details={"missing_columns": missing, "table": TARGET_TABLE_NAME})
         return
 
     # 2. 篩選：只保留 '交易標的' 包含 "建物" 的資料
@@ -178,7 +189,7 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         load_time = end_time - start_time
         
         log_to_mongo('INFO',f"Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}.",
-                     details={"rows": len(df_clean), "time_seconds": f"{load_time:.2f}", "table": TARGET_TABLE_NAME})
+                      details={"rows": len(df_clean), "time_seconds": f"{load_time:.2f}", "table": TARGET_TABLE_NAME})
         
         print(f"  -> Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}. Time: {load_time:.2f}s", file=sys.stderr)
         
@@ -225,8 +236,15 @@ if __name__ == "__main__":
     except ValueError as ve:
         tb = traceback.format_exc()
         log_to_mongo('CRITICAL',f"CRITICAL CONFIGURATION ERROR: {ve}", 
-                     details={"error_message": str(ve), "recommendation": "請確認您在 Docker 執行命令中設定了 PG_PASSWORD。", "traceback": tb})
+                      details={"error_message": str(ve), "recommendation": "請確認您在 Docker 執行命令中設定了 PG_PASSWORD。", "traceback": tb})
         print(f"CRITICAL CONFIGURATION ERROR: {ve}\nTraceback:\n{tb}", file=sys.stderr)
+
+    except OperationalError as oe:
+        tb = traceback.format_exc()
+        log_to_mongo('CRITICAL',f"CRITICAL DATABASE CONNECTION ERROR: {oe}", 
+                      details={"error_message": str(oe), "recommendation": "請檢查 Cloud SQL IP、Proxy設定、授權網路和密碼是否正確。", "traceback": tb})
+        print(f"CRITICAL DATABASE CONNECTION ERROR: {oe}\nTraceback:\n{tb}", file=sys.stderr)
+        sys.exit(1) # 連線失敗直接退出，避免浪費資源
 
     except Exception as e:
         tb = traceback.format_exc()
