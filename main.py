@@ -23,28 +23,26 @@ def log_to_mongo(log_level: str, message: str, details=None):
     PIPELINE_NAME = os.environ.get("JOB_NAME", "unknown-cloud-run-job")   
 
     log_entry = {
-        "timestamp": datetime.now(timezone.utc), # 保持使用 timezone-aware datetime
+        "timestamp": datetime.now(timezone.utc),
         "level": log_level,
         "message": message,
-        "pipeline_name": PIPELINE_NAME, # 保持使用 JOB_NAME 作為 pipeline_name
+        "pipeline_name": PIPELINE_NAME,
         "details": details if details is not None else {}
     }
 
     # 確保在 MongoDB 寫入失敗時，緊急輸出到 stderr
     fallback_message = f"[{log_level}] {message}"
     if details:
-        # 將詳細資訊也輸出到 stderr (格式化)
         fallback_message += f" | Details: {details.get('error_message', 'N/A')}"
         if log_level in ('ERROR', 'CRITICAL') and 'traceback' in details:
             fallback_message += f"\n--- TRACEBACK ---\n{details['traceback']}\n--- END TRACEBACK ---"
     
     if not MONGO_URI:
-        # 如果 MONGO_URI 沒有設定，退回到標準錯誤輸出
         print(f"[Fallback Log] {fallback_message}", file=sys.stderr)
         return
 
     try:
-        # 修正縮排並加入 tlsAllowInvalidCertificates=True 繞過 SSL 握手錯誤
+        # 使用 tlsInsecure=True 繞過 SSL 握手錯誤，用於測試
         client = MongoClient(
             MONGO_URI, 
             serverSelectionTimeoutMS=5000, 
@@ -55,7 +53,6 @@ def log_to_mongo(log_level: str, message: str, details=None):
         db[MONGO_COLLECTION].insert_one(log_entry)
         client.close()
     except Exception as e:
-        # 如果 MongoDB 寫入失敗，則退回到標準輸出進行緊急日誌記錄
         print(f"[MONGO_FAILOVER - {log_level}] {fallback_message} (Mongo Write Error: {e})", file=sys.stderr)
 
 
@@ -73,39 +70,58 @@ COLUMNS_MAPPING = {
     "建物現況格局-房": "room_count",  
     "主要用途": "use_zone",
 }
-    DB_HOST = os.environ.get("PG_HOST", "localhost")
+# 額外需要 "交易標的" 欄位進行篩選
+FILTER_COLUMN = "交易標的"
+
+
+def get_pg_engine():
+    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。"""
+    DB_USER = os.environ.get("PG_USER", "postgres")
+    DB_PASSWORD = os.environ.get("PG_PASSWORD")
+    # 從 deploy.sh 取得：/cloudsql/plenary-keel-342408:us-central1:real-estate-dw
+    DB_HOST = os.environ.get("PG_HOST", "localhost") 
     DB_PORT = os.environ.get("PG_PORT", "5432")
     DB_NAME = os.environ.get("PG_DATABASE", "postgres")
 
     if not DB_PASSWORD:
-        # 如果密碼沒有設定，無法連線
-        raise ValueError("PG_PASSWORD 環境變數未設定，請檢查 Docker 運行參數。")
+        raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
 
     if DB_HOST.startswith("/cloudsql/"):
-        # *** 修正 Cloud SQL Unix Socket 連線格式 ***
-        # 使用 ?host= 參數來傳遞 Unix Socket 路徑，並將 dbname 作為查詢字串
-        DATABASE_URL = (
-            f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@?host={DB_HOST}&dbname={DB_NAME}"
+        # *** 最終修正：使用 connect_args 傳遞 Unix Socket 路徑給 psycopg2 ***
+        # 連線 URL 中不包含 host，使用 connect_args 傳遞 host 參數 (即 /cloudsql/...)
+        
+        # 1. SQLAlchemy URL (不含 host/port)
+        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}"
+        
+        # 2. 額外參數：將 Unix Socket 路徑當作 'host' 傳遞給 psycopg2
+        connect_args = {
+            'host': DB_HOST 
+        }
+
+        print(f"DEBUG: Final PG URL: {DATABASE_URL} (Connect Args: {connect_args})", file=sys.stderr)
+        
+        return create_engine(
+            DATABASE_URL, 
+            echo=False,
+            connect_args=connect_args # 通過這裡傳遞 Unix Socket 路徑
         )
     else:
         # 傳統的 TCP/IP 連線
         DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        )
-
-    print(f"DEBUG: Final PG URL: {DATABASE_URL}", file=sys.stderr) 
-    return create_engine(DATABASE_URL, echo=False)
-
-
-# --- 2. 核心 ETL 邏輯 ---
-
-def real_estate_pipeline(year, season, area, trade_type, pg_engine):
-
-    if year > 1000:
         year -= 1911
 
+    url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
+    
+    # 【優化】動態生成 TARGET_TABLE_NAME
+    trade_type_name = 'used' if trade_type == 'A' else 'presale'
+    area_name = area_name_mapping.get(area, 'unknown').lower()
+    TARGET_TABLE_NAME = f"real_estate_{trade_type_name}_{area_name}" 
 
     log_to_mongo('INFO',f"Starting ETL for {area_name.capitalize()}, {year}S{season}, {trade_type_name.capitalize()}",
+                 details={"table": TARGET_TABLE_NAME, "url": url})
+
+    res = requests.get(url)
 
     if res.status_code != 200:
         log_to_mongo('ERROR',f"Error: HTTP status code {res.status_code} for {url}",
@@ -113,6 +129,10 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         return
 
     csv_data = StringIO(res.text, newline=None)
+    df = pd.read_csv(csv_data, on_bad_lines='skip', engine='python', encoding='utf-8', encoding_errors='ignore', skip_blank_lines=True)
+    
+    # 檢查數據是否有效
+    if df.empty or len(df) < 2:
         log_to_mongo('WARNING',f"File for {TARGET_TABLE_NAME} is empty or contains only headers. Skipping.")
         return
 
@@ -120,7 +140,6 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 
     # 1. 檢查關鍵欄位是否存在
     required_cols = list(COLUMNS_MAPPING.keys()) + [FILTER_COLUMN]
-    # 使用原始的 df.columns 進行檢查 (中文名稱)
     if not all(col in df.columns for col in required_cols):
         missing = [col for col in required_cols if col not in df.columns]
         log_to_mongo('ERROR',f"Missing critical columns for {TARGET_TABLE_NAME}", 
@@ -147,8 +166,8 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
     for col in numeric_cols:
         df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
     
-    # 使用 Int64 允許 NaN 整數
     for col in integer_cols:
+        # 使用 Int64 允許 NaN 整數
         df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').astype(float).astype('Int64')
     
     # 6. 將所有 Pandas NaN 替換為 Python 的 None (SQL NULL)
@@ -173,7 +192,6 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         print(f"  -> Successfully loaded {len(df_clean)} rows to {TARGET_TABLE_NAME}. Time: {load_time:.2f}s", file=sys.stderr)
         
     except Exception as e:
-        # 將錯誤訊息和 traceback 寫入 MongoDB
         tb = traceback.format_exc()
         log_to_mongo(
             'ERROR', 
@@ -186,7 +204,6 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
                 "data_count": len(df_clean) if 'df_clean' in locals() else 0
             }
         )
-        # 緊急備援日誌 : 輸出到 stderr
         print(f"  -> CRITICAL DB ERROR for {TARGET_TABLE_NAME}: {e}\nTraceback:\n{tb}", file=sys.stderr)
 
 
@@ -215,14 +232,12 @@ if __name__ == "__main__":
         log_to_mongo('INFO',"Pipeline execution finished successfully.")
 
     except ValueError as ve:
-        # 處理配置錯誤 (例如 PG_PASSWORD 未設定)
         tb = traceback.format_exc()
         log_to_mongo('CRITICAL',f"CRITICAL CONFIGURATION ERROR: {ve}", 
                      details={"error_message": str(ve), "recommendation": "請確認您在 Docker 執行命令中設定了 PG_PASSWORD。", "traceback": tb})
         print(f"CRITICAL CONFIGURATION ERROR: {ve}\nTraceback:\n{tb}", file=sys.stderr)
 
     except Exception as e:
-        # 處理系統級別錯誤 (例如 PostgreSQL/Mongo 連線失敗)
         tb = traceback.format_exc()
         log_to_mongo(
             'CRITICAL',
@@ -234,22 +249,7 @@ if __name__ == "__main__":
                 "recommendation": "請檢查 Cloud SQL IP、連線密碼、防火牆規則以及 Mongo URI 是否正確。"
             }
         )
-        # 確保此系統級別錯誤能被 Docker/Airflow 捕捉到
-        print(f"CRITICAL SYSTEM ERROR: {e}\nTraceback:\n{tb}", file=sys.stderr)    df = pd.read_csv(csv_data, on_bad_lines='skip', engine='python', encoding='utf-8', encoding_errors='ignore', skip_blank_lines=True)
+        print(f"CRITICAL SYSTEM ERROR: {e}\nTraceback:\n{tb}", file=sys.stderr)def real_estate_pipeline(year, season, area, trade_type, pg_engine):
 
-    if df.empty or len(df) < 2:
-                 details={"table": TARGET_TABLE_NAME, "url": url})
-
-    res = requests.get(url)
-    url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
-    
-    TARGET_TABLE_NAME = f"real_estate_{trade_type_name}_{area_name}" # 將表名改為小寫以符合PostgreSQL慣例
-    # 【優化】動態生成 TARGET_TABLE_NAME
-    trade_type_name = 'used' if trade_type == 'A' else 'presale'
-    area_name = area_name_mapping.get(area, 'unknown').lower()
-# 額外需要 "交易標的" 欄位進行篩選
-    DB_USER = os.environ.get("PG_USER", "postgres")
-    DB_PASSWORD = os.environ.get("PG_PASSWORD")
-FILTER_COLUMN = "交易標的"
-
+    if year > 1000:
 
