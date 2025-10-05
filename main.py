@@ -87,7 +87,7 @@ def get_pg_engine():
         raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
 
     if DB_HOST.startswith("/cloudsql/"):
-        # *** 最終修正：使用 connect_args 傳遞 Unix Socket 路徑給 psycopg2 ***
+        # *** Cloud SQL Unix Socket 連線修正 (使用 connect_args) ***
         # 連線 URL 中不包含 host，使用 connect_args 傳遞 host 參數 (即 /cloudsql/...)
         
         # 1. SQLAlchemy URL (不含 host/port)
@@ -109,6 +109,17 @@ def get_pg_engine():
         # 傳統的 TCP/IP 連線
         DATABASE_URL = (
             f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        )
+        print(f"DEBUG: Final PG URL: {DATABASE_URL}", file=sys.stderr)
+        # *** 修正：補上 return 指令 ***
+        return create_engine(DATABASE_URL, echo=False)
+
+
+# --- 2. 核心 ETL 邏輯 ---
+
+def real_estate_pipeline(year, season, area, trade_type, pg_engine):
+
+    if year > 1000:
         year -= 1911
 
     url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
@@ -198,7 +209,7 @@ def get_pg_engine():
             f"DB Load ERROR for {TARGET_TABLE_NAME}: {type(e).__name__}",
             details={
                 "error_type": type(e).__name__,
-                "error_message": str(e),
+                "error_message": str(e), 
                 "traceback": tb, 
                 "table_name": TARGET_TABLE_NAME,
                 "data_count": len(df_clean) if 'df_clean' in locals() else 0
@@ -249,7 +260,4 @@ if __name__ == "__main__":
                 "recommendation": "請檢查 Cloud SQL IP、連線密碼、防火牆規則以及 Mongo URI 是否正確。"
             }
         )
-        print(f"CRITICAL SYSTEM ERROR: {e}\nTraceback:\n{tb}", file=sys.stderr)def real_estate_pipeline(year, season, area, trade_type, pg_engine):
-
-    if year > 1000:
-
+        print(f"CRITICAL SYSTEM ERROR: {e}\nTraceback:\n{tb}", file=sys.stderr)
