@@ -5,7 +5,7 @@ set -e # 任何指令失敗即終止
 export REGION="us-central1"
 export IMAGE_REPO="cloud-run-real-estate"
 export IMAGE_NAME="cloud-run-postgre-mongo"
-export IMAGE_TAG="v4" 
+export IMAGE_TAG="v5-tcp" 
 
 export GCP_PROJECT_ID=$(gcloud config get-value project)
 export IMAGE_PATH="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${IMAGE_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
@@ -14,8 +14,10 @@ export IMAGE_PATH="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${IMAGE_REPO}/${IM
 export JOB_NAME="cloud-run-real-estate-job"
 export PG_USER='postgres'
 export PG_DATABASE='postgres'
-export PG_HOST='/cloudsql/plenary-keel-342408:us-central1:real-estate-dw'
 export MONGO_DB_NAME='real-estate-etl_monitoring'
+
+# Cloud SQL 實例名稱 (用於部署旗標) - 格式為: project-id:region:instance-name
+export CLOUDSQL_INSTANCE_NAME='plenary-keel-342408:us-central1:real-estate-dw'
 
 # --- 部署/執行指令 ---
 gcloud builds submit . --tag $IMAGE_PATH
@@ -29,7 +31,7 @@ gcloud run jobs deploy $JOB_NAME \
   --task-timeout 60s \
   --set-cloudsql-instances "$CLOUDSQL_INSTANCE_NAME" \
   --set-secrets MONGO_URI="MONGO_ATLAS_URI:latest",PG_PASSWORD="PG_PASSWORD:latest" \
-  --set-env-vars MONGO_DB_NAME="$MONGO_DB_NAME",PG_HOST="$PG_HOST",PG_USER="$PG_USER",PG_DATABASE="$PG_DATABASE"
+  --set-env-vars MONGO_DB_NAME="$MONGO_DB_NAME",PG_USER="$PG_USER",PG_DATABASE="$PG_DATABASE"
 
 # 執行任務
 gcloud run jobs execute $JOB_NAME --region $REGION --wait

@@ -74,44 +74,34 @@ COLUMNS_MAPPING = {
 # 額外需要 "交易標的" 欄位進行篩選
 FILTER_COLUMN = "交易標的"
 
-
 def get_pg_engine():
-    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。"""
+    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。
+    在 Cloud Run (Job) 環境下，強制使用 TCP 迴路連線 (127.0.0.1:5432)。
+    """
     DB_USER = os.environ.get("PG_USER", "postgres")
     DB_PASSWORD = os.environ.get("PG_PASSWORD")
-    DB_HOST = os.environ.get("PG_HOST", "localhost") 
     DB_NAME = os.environ.get("PG_DATABASE", "postgres")
+    DB_PORT = os.environ.get("PG_PORT", "5432")
 
     if not DB_PASSWORD:
         raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
 
-    # 檢查是否為 Unix Socket (Proxy) 連線
-    if DB_HOST.startswith("/cloudsql/"):
-        
-        # DATABASE_URL 的 host 欄位必須留空 (或只填寫 @/)
-        # 這會強制 Psycopg2 進入 Unix Socket 模式，並期望在 connect_args 中找到路徑。
-        DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}"
-        
-        # connect_args 必須將 Unix Socket 目錄直接賦值給 'host' 鍵。
-        # Psycopg2 專門處理這種情況，將這個值視為 Socket 目錄。
-        connect_args = {
-            'host': DB_HOST 
-        }
-
-        print(f"DEBUG (Socket Final - V3): Final PG URL: {DATABASE_URL} (Connect Args: {connect_args})", file=sys.stderr)
-        
-        # 執行連線
-        return create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
-        
+    # 檢查是否處於 Cloud Run 環境 (K_SERVICE 變數由 Cloud Run 自動設定)
+    if os.environ.get("K_SERVICE"):
+        # 處於 Cloud Run 環境且有設定 --set-cloudsql-instances，Proxy 必然監聽 127.0.0.1:5432
+        DB_HOST_TO_USE = "127.0.0.1"
+        print(f"DEBUG (Cloud Run): Final PG URL: Targeting {DB_HOST_TO_USE}:{DB_PORT} (TCP Loopback)", file=sys.stderr)
     else:
-        # 傳統的 TCP/IP 連線 (保持不變)
-        DB_PORT = os.environ.get("PG_PORT", "5432")
-        DATABASE_URL = (
-            f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        )
-        print(f"DEBUG (TCP/IP): Final PG URL: {DATABASE_URL}", file=sys.stderr)
-        return create_engine(DATABASE_URL, echo=False)
+        # 外部或本地測試環境，使用 PG_HOST 環境變數
+        DB_HOST_TO_USE = os.environ.get("PG_HOST", "localhost")
+        print(f"DEBUG (External/Local): Final PG URL: Targeting {DB_HOST_TO_USE}:{DB_PORT} (TCP/IP External)", file=sys.stderr)
 
+    
+    DATABASE_URL = (
+        f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST_TO_USE}:{DB_PORT}/{DB_NAME}"
+    )
+    
+    return create_engine(DATABASE_URL, echo=False)
 
 # --- 2. 核心 ETL 邏輯 (保持不變) ---
 
