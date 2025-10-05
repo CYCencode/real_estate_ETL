@@ -26,5 +26,5 @@ gcloud run jobs deploy $JOB_NAME \
   --vpc-connector cloud-run-psc-connector \
   --vpc-egress all \
   --task-timeout 60s \
-  --set-secrets MONGO_URI="MONGO_ATLAS_URI:latest",PG_PASSWORD="PG_PASSWORD_SECRET:latest" \
+  --set-secrets MONGO_URI="MONGO_ATLAS_URI:latest",PG_PASSWORD="PG_PASSWORD:latest" \
   --set-env-vars MONGO_DB_NAME="$MONGO_DB_NAME",PG_HOST="$PG_HOST",PG_USER="$PG_USER",PG_DATABASE="$PG_DATABASE"
