@@ -5,7 +5,7 @@ set -e # 任何指令失敗即終止
 export REGION="us-central1"
 export IMAGE_REPO="cloud-run-real-estate"
 export IMAGE_NAME="cloud-run-postgre-mongo"
-export IMAGE_TAG="v1.0" 
+export IMAGE_TAG="v2.0" 
 
 export GCP_PROJECT_ID=$(gcloud config get-value project)
 export IMAGE_PATH="${REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${IMAGE_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
