@@ -20,13 +20,13 @@ def log_to_mongo(log_level: str, message: str, details=None):
     MONGO_URI = os.environ.get("MONGO_URI")
     MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "etl_monitoring")
     MONGO_COLLECTION = os.environ.get("MONGO_COLLECTION", "pipeline_logs")
-    PIPELINE_NAME = os.environ.get("JOB_NAME", "unknown-cloud-run-job")    
+    PIPELINE_NAME = os.environ.get("JOB_NAME", "unknown-cloud-run-job")   
 
     log_entry = {
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(timezone.utc), # 保持使用 timezone-aware datetime
         "level": log_level,
         "message": message,
-        "pipeline_name": PIPELINE_NAME,
+        "pipeline_name": PIPELINE_NAME, # 保持使用 JOB_NAME 作為 pipeline_name
         "details": details if details is not None else {}
     }
 
@@ -73,14 +73,6 @@ COLUMNS_MAPPING = {
     "建物現況格局-房": "room_count",  
     "主要用途": "use_zone",
 }
-# 額外需要 "交易標的" 欄位進行篩選
-FILTER_COLUMN = "交易標的"
-
-
-def get_pg_engine():
-    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。"""
-    DB_USER = os.environ.get("PG_USER", "postgres")
-    DB_PASSWORD = os.environ.get("PG_PASSWORD")
     DB_HOST = os.environ.get("PG_HOST", "localhost")
     DB_PORT = os.environ.get("PG_PORT", "5432")
     DB_NAME = os.environ.get("PG_DATABASE", "postgres")
@@ -90,10 +82,10 @@ def get_pg_engine():
         raise ValueError("PG_PASSWORD 環境變數未設定，請檢查 Docker 運行參數。")
 
     if DB_HOST.startswith("/cloudsql/"):
-        # Unix Socket 連線格式
+        # *** 修正 Cloud SQL Unix Socket 連線格式 ***
+        # 使用 ?host= 參數來傳遞 Unix Socket 路徑，並將 dbname 作為查詢字串
         DATABASE_URL = (
-            f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@/{DB_NAME}?"
-            f"host={DB_HOST}"
+            f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@?host={DB_HOST}&dbname={DB_NAME}"
         )
     else:
         # 傳統的 TCP/IP 連線
@@ -112,17 +104,8 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
     if year > 1000:
         year -= 1911
 
-    url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
-   
-    # 【優化】動態生成 TARGET_TABLE_NAME
-    trade_type_name = 'used' if trade_type == 'A' else 'presale'
-    area_name = area_name_mapping.get(area, 'unknown').lower()
-    TARGET_TABLE_NAME = f"real_estate_{trade_type_name}_{area_name}" # 將表名改為小寫以符合PostgreSQL慣例
 
     log_to_mongo('INFO',f"Starting ETL for {area_name.capitalize()}, {year}S{season}, {trade_type_name.capitalize()}",
-                 details={"table": TARGET_TABLE_NAME, "url": url})
-
-    res = requests.get(url)
 
     if res.status_code != 200:
         log_to_mongo('ERROR',f"Error: HTTP status code {res.status_code} for {url}",
@@ -130,9 +113,6 @@ def real_estate_pipeline(year, season, area, trade_type, pg_engine):
         return
 
     csv_data = StringIO(res.text, newline=None)
-    df = pd.read_csv(csv_data, on_bad_lines='skip', engine='python', encoding='utf-8', encoding_errors='ignore', skip_blank_lines=True)
-
-    if df.empty or len(df) < 2:
         log_to_mongo('WARNING',f"File for {TARGET_TABLE_NAME} is empty or contains only headers. Skipping.")
         return
 
@@ -255,4 +235,21 @@ if __name__ == "__main__":
             }
         )
         # 確保此系統級別錯誤能被 Docker/Airflow 捕捉到
-        print(f"CRITICAL SYSTEM ERROR: {e}\nTraceback:\n{tb}", file=sys.stderr)
+        print(f"CRITICAL SYSTEM ERROR: {e}\nTraceback:\n{tb}", file=sys.stderr)    df = pd.read_csv(csv_data, on_bad_lines='skip', engine='python', encoding='utf-8', encoding_errors='ignore', skip_blank_lines=True)
+
+    if df.empty or len(df) < 2:
+                 details={"table": TARGET_TABLE_NAME, "url": url})
+
+    res = requests.get(url)
+    url = f"https://plvr.land.moi.gov.tw//DownloadSeason?season={year}S{season}&fileName={area}_lvr_land_{trade_type}.csv"
+    
+    TARGET_TABLE_NAME = f"real_estate_{trade_type_name}_{area_name}" # 將表名改為小寫以符合PostgreSQL慣例
+    # 【優化】動態生成 TARGET_TABLE_NAME
+    trade_type_name = 'used' if trade_type == 'A' else 'presale'
+    area_name = area_name_mapping.get(area, 'unknown').lower()
+# 額外需要 "交易標的" 欄位進行篩選
+    DB_USER = os.environ.get("PG_USER", "postgres")
+    DB_PASSWORD = os.environ.get("PG_PASSWORD")
+FILTER_COLUMN = "交易標的"
+
+
