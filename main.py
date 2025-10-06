@@ -75,54 +75,36 @@ COLUMNS_MAPPING = {
 FILTER_COLUMN = "交易標的"
 
 def get_pg_engine():
-    """從環境變數中取得 PostgreSQL 連線資訊並建立 SQLAlchemy 引擎。"""
+    """使用 Public IP + Authorized Networks 連線。"""
     DB_USER = os.environ.get("PG_USER", "postgres")
     DB_PASSWORD = os.environ.get("PG_PASSWORD")
-    DB_NAME = os.environ.get("PG_DATABASE", "postgres")
+    
+    # 使用 Public IP
+    DB_HOST_PUBLIC = os.environ.get("PG_HOST_PUBLIC") 
+    
     DB_PORT = os.environ.get("PG_PORT", "5432")
+    DB_NAME = os.environ.get("PG_DATABASE", "postgres")
 
-    if not DB_PASSWORD:
-        raise ValueError("PG_PASSWORD 環境變數未設定，無法建立連線。")
-
-    # 檢查是否處於 Cloud Run JOB 環境
-    is_cloud_run_job = os.environ.get("CLOUD_RUN_JOB") is not None
-    
-    if is_cloud_run_job:
-        # Cloud Run 環境下，強制使用 TCP 連線
-        DB_HOST_TO_USE = "127.0.0.1"
-        print(f"DEBUG (Cloud Run Job): Final PG URL: Targeting {DB_HOST_TO_USE}:{DB_PORT} (TCP Loopback)", file=os.sys.stderr)
-    else:
-        # 外部或本地測試環境
-        DB_HOST_TO_USE = os.environ.get("PG_HOST", "localhost")
-        print(f"DEBUG (External/Local): Final PG URL: Targeting {DB_HOST_TO_USE}:{DB_PORT} (TCP/IP External)", file=os.sys.stderr)
+    if not DB_PASSWORD or not DB_HOST_PUBLIC:
+        raise ValueError("PG_PASSWORD 或 PG_HOST_PUBLIC 環境變數未設定。")
 
     
+    # 直接連線到 Public IP
     DATABASE_URL = (
-        f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST_TO_USE}:{DB_PORT}/{DB_NAME}"
+        f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST_PUBLIC}:{DB_PORT}/{DB_NAME}"
     )
-
-    # 為了解決時序問題，添加連線重試邏輯
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            engine = create_engine(DATABASE_URL, echo=False)
-            # 嘗試建立一個實際連線來確認是否成功
-            with engine.connect() as connection:
-                print(f"DEBUG: Successfully connected to PostgreSQL on attempt {attempt + 1}.", file=os.sys.stderr)
-                return engine
-
-        except OperationalError as e:
-            if not is_cloud_run_job or attempt == max_retries - 1:
-                # 如果不是在 Cloud Run Job 上，或已經是最後一次嘗試，則拋出錯誤
-                print(f"CRITICAL SYSTEM ERROR: Failed to connect after {attempt + 1} attempts.", file=os.sys.stderr)
-                raise e
-            
-            # 在 Cloud Run Job 上，由於可能是 Proxy 尚未啟動，進行重試
-            print(f"DEBUG: Connection failed on attempt {attempt + 1}. Retrying in 2 seconds...", file=os.sys.stderr)
-            time.sleep(2) # 暫停 2 秒
     
-    # 一般來說不會執行，只是安全措施
-    raise OperationalError("Failed to connect to PostgreSQL after multiple retries.")
+    print(f"DEBUG (Public IP): Final PG URL: Targeting {DB_HOST_PUBLIC}:{DB_PORT} (Authorized Networks)", file=sys.stderr)
+    
+    try:
+        engine = create_engine(DATABASE_URL, echo=False)
+        # 嘗試建立一個實際連線
+        with engine.connect() as connection:
+            print("DEBUG: Successfully connected to PostgreSQL using Public IP.", file=sys.stderr)
+            return engine
+    except OperationalError as e:
+        print(f"CRITICAL SYSTEM ERROR: Failed to connect using Public IP: {e}", file=sys.stderr)
+        raise e
 
 # --- 2. 核心 ETL 邏輯 (保持不變) ---
 
