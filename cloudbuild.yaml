@@ -1,0 +1,77 @@
+# cloudbuild.yaml 內容
+
+steps:
+# 步驟 1: 設定必要的變數
+- name: 'gcr.io/google.com/cloudsdk/cloud-sdk'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # 從 Cloud Build 環境中取得專案 ID
+    export GCP_PROJECT_ID=$$PROJECT_ID
+    
+    # 設置部署和映像檔變數
+    export REGION="us-central1"
+    export IMAGE_REPO="cloud-run-real-estate"
+    export IMAGE_NAME="cloud-run-postgre-mongo"
+    # 使用時間戳確保 Tag 唯一性，避免快取問題，並記錄每次執行版本
+    export IMAGE_TAG="v$(date +%Y%m%d%H%M%S)"
+    export IMAGE_PATH="${REGION}-docker.pkg.dev/$GCP_PROJECT_ID/$IMAGE_REPO/$IMAGE_NAME:$IMAGE_TAG"
+
+    # 設定 Job/App 變數
+    export JOB_NAME="cloud-run-real-estate-job"
+    export PG_USER='postgres'
+    export PG_DATABASE='postgres'
+    export MONGO_DB_NAME='real-estate-etl_monitoring'
+    export CLOUDSQL_PUBLIC_IP='136.114.207.45'
+
+    # 將變數儲存到 /workspace/vars.env，供後續步驟使用
+    echo "IMAGE_PATH=$IMAGE_PATH" > /workspace/vars.env
+    echo "JOB_NAME=$JOB_NAME" >> /workspace/vars.env
+    echo "REGION=$REGION" >> /workspace/vars.env
+    echo "MONGO_DB_NAME=$MONGO_DB_NAME" >> /workspace/vars.env
+    echo "PG_USER=$PG_USER" >> /workspace/vars.env
+    echo "PG_DATABASE=$PG_DATABASE" >> /workspace/vars.env
+    echo "CLOUDSQL_PUBLIC_IP=$CLOUDSQL_PUBLIC_IP" >> /workspace/vars.env
+
+
+# 步驟 2: 建置 Docker Image 並推送到 Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: 'bash'
+  args: 
+    - '-c'
+    - |
+      source /workspace/vars.env
+      docker build -t $IMAGE_PATH .
+      docker push $IMAGE_PATH
+
+# 步驟 3: 部署 Cloud Run Job
+- name: 'gcr.io/google.com/cloudsdk/cloud-sdk'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    source /workspace/vars.env
+    
+    echo "Deploying Cloud Run Job $JOB_NAME with Image $IMAGE_PATH"
+    
+    gcloud run jobs deploy $JOB_NAME \
+      --image "$IMAGE_PATH" \
+      --region "$REGION" \
+      --vpc-connector cloud-run-psc-connector \
+      --vpc-egress all \
+      --task-timeout 60s \
+      --set-secrets MONGO_URI="MONGO_ATLAS_URI:latest",PG_PASSWORD="PG_PASSWORD:latest" \
+      --set-env-vars MONGO_DB_NAME="$MONGO_DB_NAME",PG_USER="$PG_USER",PG_DATABASE="$PG_DATABASE",PG_HOST_PUBLIC="$CLOUDSQL_PUBLIC_IP" \
+      --clear-config-maps \
+      --clear-env-vars
+      
+# 步驟 4: 執行 Cloud Run Job
+- name: 'gcr.io/google.com/cloudsdk/cloud-sdk'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    source /workspace/vars.env
+    echo "Executing Cloud Run Job $JOB_NAME..."
+    gcloud run jobs execute $JOB_NAME --region $REGION --wait
