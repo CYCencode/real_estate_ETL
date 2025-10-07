@@ -1,5 +1,6 @@
 # cloudbuild.yaml 內容
-
+options:
+  logging: CLOUD_LOGGING_ONLY
 steps:
 # 步驟 1: 設定必要的變數
 - name: 'gcr.io/google.com/cloudsdk/cloud-sdk'
