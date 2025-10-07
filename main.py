@@ -43,12 +43,10 @@ def log_to_mongo(log_level: str, message: str, details=None):
         return
 
     try:
-        # 使用 tlsInsecure=True 繞過 SSL 握手錯誤，用於測試
         client = MongoClient(
             MONGO_URI, 
             serverSelectionTimeoutMS=5000, 
-            w=0,
-            tlsInsecure=True
+            w=0
         ) 
         db = client[MONGO_DB_NAME]
         db[MONGO_COLLECTION].insert_one(log_entry)
