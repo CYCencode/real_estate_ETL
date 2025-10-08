@@ -42,8 +42,6 @@ steps:
         export TZ=Asia/Taipei
         DATE_TAG=$(date +%Y%m%d)
         
-        # 確保內部 IMAGE_BASE 變數定義和引用正確，避免被 Cloud Build 誤判
-        IMAGE_BASE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_IMAGE_REPO}/${_IMAGE_NAME}"
         IMAGE_PATH="${IMAGE_BASE}:${DATE_TAG}"
         
         echo "Building image: ${IMAGE_PATH}"
@@ -54,7 +52,6 @@ steps:
         
         # 儲存變數供後續步驟使用
         echo "${IMAGE_PATH}" > /workspace/image_path.txt
-        echo "${IMAGE_BASE}" > /workspace/image_base.txt
     id: 'build-image'
 
   # 步驟 3: 推送 Image
