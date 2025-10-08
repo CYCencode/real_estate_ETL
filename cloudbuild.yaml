@@ -14,6 +14,9 @@ substitutions:
   _VPC_CONNECTOR: 'cloud-run-psc-connector'
   _GITHUB_REPO: 'CYCencode/real_estate_ETL'
   _GITHUB_BRANCH: 'main'
+  IMAGE_BASE: ''
+  IMAGE_PATH: ''
+  DATE_TAG: ''
 
 steps:
   # 步驟 1: Clone GitHub 最新程式碼
