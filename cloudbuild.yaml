@@ -1,104 +1,112 @@
+# cloudbuild.yaml - Scheduler 直接觸發，從 GitHub clone 最新程式碼
 options:
-  logging: CLOUD_LOGGING_ONLY
+  logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  _REGION: 'us-central1'
-  _IMAGE_REPO: 'cloud-run-real-estate'
-  _IMAGE_NAME: 'cloud-run-postgre-mongo'
-  _JOB_NAME: 'cloud-run-real-estate-job'
-  _PG_USER: 'postgres'
-  _PG_DATABASE: 'postgres'
-  _MONGO_DB_NAME: 'real-estate-etl_monitoring'
-  _CLOUDSQL_PUBLIC_IP: '136.114.207.45'
-  _VPC_CONNECTOR: 'cloud-run-psc-connector'
-  _GITHUB_REPO: 'CYCencode/real_estate_ETL'
-  _GITHUB_BRANCH: 'main'
+  _REGION: 'us-central1'
+  _IMAGE_REPO: 'cloud-run-real-estate'
+  _IMAGE_NAME: 'cloud-run-postgre-mongo'
+  _JOB_NAME: 'cloud-run-real-estate-job'
+  _PG_USER: 'postgres'
+  _PG_DATABASE: 'postgres'
+  _MONGO_DB_NAME: 'real-estate-etl_monitoring'
+  _CLOUDSQL_PUBLIC_IP: '136.114.207.45'
+  _VPC_CONNECTOR: 'cloud-run-psc-connector'
+  _GITHUB_REPO: 'CYCencode/real_estate_ETL'
+  _GITHUB_BRANCH: 'main'
 
 steps:
+  # 步驟 1: Clone GitHub 最新程式碼
   - name: 'gcr.io/cloud-builders/git'
     secretEnv: ['GITHUB_TOKEN']
     entrypoint: 'bash'
-    args:
+    args:
       - '-c'
-      - |
-        echo "Cloning latest code from GitHub..."
-        git clone -b ${_GITHUB_BRANCH} --depth 1 \
-          https://$$GITHUB_TOKEN@github.com/${_GITHUB_REPO}.git /workspace/app
-        
-        cd /workspace/app
-        git log -1 --pretty=format:"Latest commit: %H by %an - %s"
-    id: 'clone-repo'
+      - |
+        echo "Cloning latest code from GitHub..."
+        # 使用 $$ 逃逸 GITHUB_TOKEN
+        git clone -b ${_GITHUB_BRANCH} --depth 1 \
+          https://$$GITHUB_TOKEN@github.com/${_GITHUB_REPO}.git /workspace/app
+        cd /workspace/app
+        git log -1 --pretty=format:"Latest commit: %H by %an - %s"
+    id: 'clone-repo'
 
-  
+  # 步驟 2: 建置 Docker Image (修正內部變數引用)
   - name: 'gcr.io/cloud-builders/docker'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        export TZ=Asia/Taipei
-        DATE_TAG=$(date +%Y%m%d)
-        
-        IMAGE_BASE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_IMAGE_REPO}/${_IMAGE_NAME}"
-        IMAGE_PATH="${IMAGE_BASE}:${DATE_TAG}"
-        
-        echo "Building image: ${IMAGE_PATH}"
-        
-        docker build \
-          -t "${IMAGE_PATH}" \
-          /workspace/app
-        
-        echo "${IMAGE_PATH}" > /workspace/image_path.txt
-        echo "${IMAGE_BASE}" > /workspace/image_base.txt
-    id: 'build-image'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        export TZ=Asia/Taipei
+        DATE_TAG=$(date +%Y%m%d)
+        
+        # 確保內部 IMAGE_BASE 變數定義和引用正確，避免被 Cloud Build 誤判
+        IMAGE_BASE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_IMAGE_REPO}/${_IMAGE_NAME}"
+        IMAGE_PATH="${IMAGE_BASE}:${DATE_TAG}"
+        
+        echo "Building image: ${IMAGE_PATH}"
+        
+        docker build \
+          -t "${IMAGE_PATH}" \
+          /workspace/app
+        
+        # 儲存變數供後續步驟使用
+        echo "${IMAGE_PATH}" > /workspace/image_path.txt
+        echo "${IMAGE_BASE}" > /workspace/image_base.txt
+    id: 'build-image'
 
-  - name: 'gcr.io/cloud-builders/docker'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        IMAGE_PATH=$(cat /workspace/image_path.txt)
-        echo "Pushing image: ${IMAGE_PATH}"
-        docker push "${IMAGE_PATH}"
-    id: 'push-image'
+  # 步驟 3: 推送 Image
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        IMAGE_PATH=$(cat /workspace/image_path.txt)
+        echo "Pushing image: ${IMAGE_PATH}"
+        docker push "${IMAGE_PATH}"
+    id: 'push-image'
 
-  - name: 'gcr.io/google.com/cloudsdks/cloud-sdk:slim'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        IMAGE_PATH=$(cat /workspace/image_path.txt)
-        echo "Deploying Cloud Run Job with image: ${IMAGE_PATH}"
-        
-        gcloud run jobs deploy ${_JOB_NAME} \
-          --image="${IMAGE_PATH}" \
-          --region=${_REGION} \
-          --vpc-connector=${_VPC_CONNECTOR} \
-          --vpc-egress=all-traffic \
-          --max-retries=2 \
-          --task-timeout=10m \
-          --memory=2Gi \
-          --cpu=2 \
-          --set-secrets=MONGO_URI=MONGO_ATLAS_URI:latest,PG_PASSWORD=PG_PASSWORD:latest \
-          --set-env-vars=MONGO_DB_NAME=${_MONGO_DB_NAME},PG_USER=${_PG_USER},PG_DATABASE=${_PG_DATABASE},PG_HOST_PUBLIC=${_CLOUDSQL_PUBLIC_IP}
-    id: 'deploy-job'
+  # 步驟 4: 部署 Cloud Run Job
+  - name: 'gcr.io/google.com/cloudsdks/cloud-sdk:slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        IMAGE_PATH=$(cat /workspace/image_path.txt)
+        echo "Deploying Cloud Run Job with image: ${IMAGE_PATH}"
+        
+        gcloud run jobs deploy ${_JOB_NAME} \
+          --image="${IMAGE_PATH}" \
+          --region=${_REGION} \
+          --vpc-connector=${_VPC_CONNECTOR} \
+          --vpc-egress=all-traffic \
+          --max-retries=2 \
+          --task-timeout=10m \
+          --memory=2Gi \
+          --cpu=2 \
+          --set-secrets=MONGO_URI=MONGO_ATLAS_URI:latest,PG_PASSWORD=PG_PASSWORD:latest \
+          --set-env-vars=MONGO_DB_NAME=${_MONGO_DB_NAME},PG_USER=${_PG_USER},PG_DATABASE=${_PG_DATABASE},PG_HOST_PUBLIC=${_CLOUDSQL_PUBLIC_IP}
+    id: 'deploy-job'
 
-  - name: 'gcr.io/google.com/cloudsdks/cloud-sdk:slim'
-    entrypoint: 'gcloud'
-    args:
-      - 'run'
-      - 'jobs'
-      - 'execute'
-      - '${_JOB_NAME}'
-      - '--region=${_REGION}'
-      - '--wait'
-    id: 'execute-job'
+  # 步驟 5: 執行 Cloud Run Job
+  - name: 'gcr.io/google.com/cloudsdks/cloud-sdk:slim'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'execute'
+      - '${_JOB_NAME}'
+      - '--region=${_REGION}'
+      - '--wait'
+    id: 'execute-job'
 
+# Secret 變數
 availableSecrets:
-  secretManager:
-    - versionName: projects/$PROJECT_ID/secrets/GITHUB_TOKEN/versions/latest
-      env: 'GITHUB_TOKEN'
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/GITHUB_TOKEN/versions/latest
+      env: 'GITHUB_TOKEN'
 
 images:
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_IMAGE_REPO}/${_IMAGE_NAME}:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_IMAGE_REPO}/${_IMAGE_NAME}:latest'
 
 timeout: '1800s'
