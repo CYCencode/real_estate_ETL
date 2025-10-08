@@ -66,7 +66,7 @@ steps:
     id: 'push-image'
 
   # 步驟 4: 部署 Cloud Run Job
-  - name: 'us-docker.pkg.dev/cloud-sdk/cloud-sdk/google/cloud-sdk:slim'
+  - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -88,7 +88,7 @@ steps:
     id: 'deploy-job'
 
   # 步驟 5: 執行 Cloud Run Job
-  - name: 'us-docker.pkg.dev/cloud-sdk/cloud-sdk/google/cloud-sdk:slim'
+  - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'gcloud'
     args:
       - 'run'
