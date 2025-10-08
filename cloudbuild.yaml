@@ -42,7 +42,7 @@ steps:
         export TZ=Asia/Taipei
         DATE_TAG=$(date +%Y%m%d)
         
-        IMAGE_PATH="${IMAGE_BASE}:${DATE_TAG}"
+        IMAGE_PATH="${_IMAGE_BASE}:${_DATE_TAG}"
         
         echo "Building image: ${IMAGE_PATH}"
         
