@@ -16,7 +16,6 @@ substitutions:
   _GITHUB_BRANCH: 'main'
   _PROJECT_ID: 'plenary-keel-342408'
   _IMAGE_BASE: '${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_IMAGE_REPO}/${_IMAGE_NAME}'
-  _DATE_TAG: 'latest'
 
 steps:
   # 步驟 1: Clone GitHub 最新程式碼
@@ -43,7 +42,7 @@ steps:
         export TZ=Asia/Taipei
         DATE_TAG=$(date +%Y%m%d)
         
-        IMAGE_PATH="${_IMAGE_BASE}:${_DATE_TAG}"
+        IMAGE_PATH="${_IMAGE_BASE}:$${DATE_TAG}"
         
         echo "Building image: $${IMAGE_PATH}"
         
