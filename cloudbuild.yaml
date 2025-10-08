@@ -44,14 +44,14 @@ steps:
         
         IMAGE_PATH="${_IMAGE_BASE}:${_DATE_TAG}"
         
-        echo "Building image: ${IMAGE_PATH}"
+        echo "Building image: $${IMAGE_PATH}"
         
         docker build \
-          -t "${IMAGE_PATH}" \
+          -t "$${IMAGE_PATH}" \
           /workspace/app
         
         # 儲存變數供後續步驟使用
-        echo "${IMAGE_PATH}" > /workspace/image_path.txt
+        echo "$${IMAGE_PATH}" > /workspace/image_path.txt
     id: 'build-image'
 
   # 步驟 3: 推送 Image
@@ -61,8 +61,8 @@ steps:
       - '-c'
       - |
         IMAGE_PATH=$(cat /workspace/image_path.txt)
-        echo "Pushing image: ${IMAGE_PATH}"
-        docker push "${IMAGE_PATH}"
+        echo "Pushing image: $${IMAGE_PATH}"
+        docker push "$${IMAGE_PATH}"
     id: 'push-image'
 
   # 步驟 4: 部署 Cloud Run Job
@@ -72,10 +72,10 @@ steps:
       - '-c'
       - |
         IMAGE_PATH=$(cat /workspace/image_path.txt)
-        echo "Deploying Cloud Run Job with image: ${IMAGE_PATH}"
+        echo "Deploying Cloud Run Job with image: $${IMAGE_PATH}"
         
         gcloud run jobs deploy ${_JOB_NAME} \
-          --image="${IMAGE_PATH}" \
+          --image="$${IMAGE_PATH}" \
           --region=${_REGION} \
           --vpc-connector=${_VPC_CONNECTOR} \
           --vpc-egress=all-traffic \
